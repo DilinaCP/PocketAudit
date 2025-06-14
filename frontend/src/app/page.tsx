@@ -1,5 +1,6 @@
 'use client'
-import Uploader from '../app/components/Uploader'
+
+import {Uploader} from '../app/components/Uploader'
 
 
 export default function Dashboard() {
