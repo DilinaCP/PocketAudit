@@ -80,7 +80,7 @@ function parseReceipt(text) {
   }
 
   // Calculate totals
-  const subtotal = items.reduce((sum, item) => sum + item.amount, 0);
+  const subtotal = items.reduce((sum, item) => sum);
   const totalLine = lines.find(line => line.includes('TOTAL:'));
   const total = totalLine ? 
     parseFloat(totalLine.replace('TOTAL:', '').trim().replace(/[^\d.]/g, '')) : 
