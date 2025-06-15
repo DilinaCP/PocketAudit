@@ -1,141 +1,203 @@
 'use client';
-
-import { Card, CardContent } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
-import { useCallback, useState } from 'react';
-import { FileRejection, useDropzone } from 'react-dropzone';
+import { useState, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
 import { toast } from 'react-hot-toast';
-import { v4 as uuidv4 } from 'uuid';
+import { createWorker } from 'tesseract.js';
+import { ReceiptText as ReceiptIcon, Loader as LoaderIcon } from 'lucide-react';
 
-type UploadFile = {
-  id: string;
-  file: File;
-  uploading: boolean;
-  progress: number;
-  isDeleting: boolean;
-  error: boolean;
-  objectUrl?: string;
+type ReceiptItem = {
+  description: string;
+  price: number;
 };
 
-export function Uploader() {
-  const [files, setFiles] = useState<UploadFile[]>([]);
-  const [result, setResult] = useState(null);
+export default function Uploader() {
+  const [receipts, setReceipts] = useState<{ items: ReceiptItem[]; text: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const uploadFile = useCallback(async (file: File) => {
-    setFiles(prev => 
-      prev.map(f => 
-        f.file === file ? { ...f, uploading: true } : f
-      )
-    );
-
-    try {
-      for (let progress = 0; progress <= 100; progress += 10) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-        setFiles(prev => 
-          prev.map(f => 
-            f.file === file ? { ...f, progress } : f
-          )
-        );
+  const extractItems = (text: string): ReceiptItem[] => {
+    // Enhanced parser for your receipt format
+    const lines = text.split('\n');
+    const items: ReceiptItem[] = [];
+    
+    lines.forEach(line => {
+      // Match lines with product codes (9 digits) and prices
+      if (line.match(/\d{9}/)) {
+        const priceMatch = line.match(/\d+\.\d{2}/);
+        if (priceMatch) {
+          items.push({
+            description: line.split(priceMatch[0])[0].replace(/\d{9}/, '').trim(),
+            price: parseFloat(priceMatch[0])
+          });
+        }
       }
-      toast.success(`${file.name} uploaded successfully!`);
-    } catch (error) {
-      setFiles(prev => 
-        prev.map(f => 
-          f.file === file ? { ...f, error: true } : f
-        )
+      // Match standalone prices
+      else {
+        const priceMatch = line.match(/\d+\.\d{2}/);
+        if (priceMatch && line.trim().length > 3) {
+          items.push({
+            description: line.replace(priceMatch[0], '').trim(),
+            price: parseFloat(priceMatch[0])
+          });
+        }
+      }
+    });
+    
+    return items.slice(0, 10); // Limit to 10 items
+  };
+
+  const processReceipt = async (file: File) => {
+    const worker = await createWorker('eng');
+    try {
+      const { data } = await worker.recognize(file);
+      return {
+        text: data.text,
+        items: extractItems(data.text)
+      };
+    } finally {
+      await worker.terminate();
+    }
+  };
+
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    setIsLoading(true);
+    try {
+      const results = await Promise.all(
+        acceptedFiles.map(async file => {
+          try {
+            const result = await processReceipt(file);
+            toast.success(`Processed: ${file.name}`);
+            return result;
+          } catch (error) {
+            toast.error(`Failed: ${file.name}`);
+            console.error('OCR Error:', error);
+            return { text: 'Processing failed', items: [] };
+          }
+        })
       );
-      toast.error(`Failed to upload ${file.name}`);
+      setReceipts(results);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-
-    if (acceptedFiles.length === 0) return;
-
-    const newFiles = acceptedFiles.map(file => ({
-      id: uuidv4(),
-      file,
-      uploading: false,
-      progress: 0,
-      isDeleting: false,
-      error: false,
-      objectUrl: URL.createObjectURL(file)
-    }));
-
-    setFiles(prev => [...prev, ...newFiles]);
-    acceptedFiles.forEach(uploadFile);
-  }, [uploadFile]);
-
-  const onDropRejected = useCallback((rejections: FileRejection[]) => {
-    rejections.forEach(({ file, errors }) => {
-      errors.forEach(error => {
-        switch (error.code) {
-          case 'too-many-files':
-            toast.error('Maximum 5 files allowed');
-            break;
-          case 'file-too-large':
-            toast.error(`${file.name} exceeds 5MB limit`);
-            break;
-          case 'file-invalid-type':
-            toast.error(`${file.name} is not an image`);
-            break;
-          default:
-            toast.error(`Cannot upload ${file.name}`);
-        }
-      });
-    });
-  }, []);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps } = useDropzone({
     onDrop,
-    onDropRejected,
+    accept: { 'image/*': ['.jpeg', '.jpg', '.png'] },
     maxFiles: 5,
-    maxSize: 5 * 1024 * 1024, // 5MB
-    accept: { 'image/*': [] }
+    maxSize: 5 * 1024 * 1024 // 5MB
   });
 
-  return (
-    <div className="space-y-4">
-      <Card className={cn(
-        'border-2 border-dashed cursor-pointer transition-colors',
-        isDragActive ? 'border-primary bg-primary/10' : 'border-border'
-      )} {...getRootProps()}>
-        <CardContent className="flex flex-col items-center justify-center h-64">
-          <input {...getInputProps()} />
-          {isDragActive ? (
-            <p className="text-primary">Drop files here</p>
-          ) : (
-            <div className="text-center space-y-2">
-              <p>Drag & drop files here</p>
-              <p className="text-sm text-muted-foreground">or click to browse</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+  // Calculate grand total
+  const grandTotal = receipts.reduce(
+    (sum, receipt) => sum + receipt.items.reduce((s, item) => s + item.price, 0),
+    0
+  );
 
-      {files.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          {files.map(file => (
-            <div key={file.id} className="relative border rounded-md overflow-hidden">
-              <img 
-                src={file.objectUrl} 
-                alt={file.file.name}
-                className="w-full h-32 object-cover"
-              />
-              <div className="p-2">
-                <p className="truncate text-sm">{file.file.name}</p>
-                {file.uploading && (
-                  <progress 
-                    value={file.progress} 
-                    max="100" 
-                    className="w-full mt-1"
-                  />
-                )}
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-3xl mx-auto px-4 py-12">
+        {/* Header */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold text-gray-900 mb-3">
+            <span className="text-blue-600">Pocket</span>Audit
+          </h1>
+          <p className="text-lg text-gray-600">
+            Smart receipt scanning for effortless expense tracking
+          </p>
+        </div>
+
+        {/* Upload Card */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 mb-8">
+          <div
+            {...getRootProps()}
+            className="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center cursor-pointer transition-all hover:border-blue-400 hover:bg-blue-50"
+          >
+            <input {...getInputProps()} />
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <ReceiptIcon className="w-14 h-14 text-blue-500" />
+              <div>
+                <p className="text-lg font-medium text-gray-800">
+                  Drag & drop receipts here
+                </p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Supported formats: JPG, PNG, PDF (max 5MB each)
+                </p>
+              </div>
+              <button
+                type="button"
+                className="mt-4 px-5 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              >
+                Select Files
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Processing Indicator */}
+        {isLoading && (
+          <div className="flex items-center justify-center py-6">
+            <LoaderIcon className="animate-spin h-6 w-6 text-blue-600 mr-3" />
+            <span className="text-gray-700 font-medium">Processing receipts...</span>
+          </div>
+        )}
+
+        {/* Results */}
+        {receipts.length > 0 && (
+          <div className="space-y-6">
+            {/* Summary Card */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">Summary</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <p className="text-sm font-medium text-blue-700 mb-1">Total Receipts</p>
+                  <p className="text-2xl font-bold text-gray-900">{receipts.length}</p>
+                </div>
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <p className="text-sm font-medium text-green-700 mb-1">Total Spent</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    RM{grandTotal.toFixed(2)}
+                  </p>
+                </div>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+
+            {/* Receipts List */}
+            <div className="space-y-4">
+              {receipts.map((receipt, i) => (
+                <div key={i} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="p-5 border-b border-gray-100 bg-gray-50 flex items-center">
+                    <ReceiptIcon className="w-5 h-5 text-gray-500 mr-2" />
+                    <h3 className="font-medium text-gray-800">Receipt #{i + 1}</h3>
+                  </div>
+                  
+                  {receipt.items.length > 0 ? (
+                    <div className="divide-y divide-gray-100">
+                      {receipt.items.map((item, j) => (
+                        <div key={j} className="px-5 py-3 flex justify-between">
+                          <span className="text-gray-700">{item.description}</span>
+                          <span className="font-medium text-gray-900">
+                            RM{item.price.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="px-5 py-3 bg-gray-50 flex justify-between font-semibold text-gray-900">
+                        <span>Subtotal</span>
+                        <span>
+                          {receipt.items.reduce((sum, item) => sum + item.price, 0).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center text-gray-500">
+                      <p>No items detected in this receipt</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
