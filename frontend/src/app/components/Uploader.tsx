@@ -1,8 +1,8 @@
 'use client';
+
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'react-hot-toast';
-import { createWorker } from 'tesseract.js';
 import { ReceiptText as ReceiptIcon, Loader as LoaderIcon } from 'lucide-react';
 
 type ReceiptItem = {
@@ -14,69 +14,56 @@ export default function Uploader() {
   const [receipts, setReceipts] = useState<{ items: ReceiptItem[]; text: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Simple parser to extract description and price from OCR text lines
   const extractItems = (text: string): ReceiptItem[] => {
-    // Enhanced parser for your receipt format
     const lines = text.split('\n');
     const items: ReceiptItem[] = [];
-    
-    lines.forEach(line => {
-      // Match lines with product codes (9 digits) and prices
-      if (line.match(/\d{9}/)) {
-        const priceMatch = line.match(/\d+\.\d{2}/);
-        if (priceMatch) {
-          items.push({
-            description: line.split(priceMatch[0])[0].replace(/\d{9}/, '').trim(),
-            price: parseFloat(priceMatch[0])
-          });
-        }
-      }
-      // Match standalone prices
-      else {
-        const priceMatch = line.match(/\d+\.\d{2}/);
-        if (priceMatch && line.trim().length > 3) {
-          items.push({
-            description: line.replace(priceMatch[0], '').trim(),
-            price: parseFloat(priceMatch[0])
-          });
+
+    lines.forEach((line) => {
+      // Try to find a price like 12.34 at the end of line
+      const priceMatch = line.match(/(\d+\.\d{2})$/);
+      if (priceMatch) {
+        const price = parseFloat(priceMatch[1]);
+        const description = line.replace(priceMatch[1], '').trim();
+        if (description.length > 0 && price > 0) {
+          items.push({ description, price });
         }
       }
     });
-    
-    return items.slice(0, 10); // Limit to 10 items
+
+    return items.slice(0, 10); 
   };
 
-  const processReceipt = async (file: File) => {
-    const worker = await createWorker('eng');
+  const uploadToBackend = async (file: File) => {
+    setIsLoading(true);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
     try {
-      const { data } = await worker.recognize(file);
-      return {
-        text: data.text,
-        items: extractItems(data.text)
-      };
+      const res = await fetch('http://localhost:4000/api/uploadReceipt', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
+
+      const data = await res.json();
+
+      const items = extractItems(data.text);
+
+      setReceipts((prev) => [...prev, { text: data.text, items }]);
+      toast.success(`Processed: ${file.name}`);
+    } catch (error: any) {
+      toast.error(`Failed to process ${file.name}: ${error.message}`);
     } finally {
-      await worker.terminate();
+      setIsLoading(false);
     }
   };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    setIsLoading(true);
-    try {
-      const results = await Promise.all(
-        acceptedFiles.map(async file => {
-          try {
-            const result = await processReceipt(file);
-            toast.success(`Processed: ${file.name}`);
-            return result;
-          } catch (error) {
-            toast.error(`Failed: ${file.name}`);
-            console.error('OCR Error:', error);
-            return { text: 'Processing failed', items: [] };
-          }
-        })
-      );
-      setReceipts(results);
-    } finally {
-      setIsLoading(false);
+    for (const file of acceptedFiles) {
+      await uploadToBackend(file);
     }
   }, []);
 
@@ -84,10 +71,9 @@ export default function Uploader() {
     onDrop,
     accept: { 'image/*': ['.jpeg', '.jpg', '.png'] },
     maxFiles: 5,
-    maxSize: 5 * 1024 * 1024 // 5MB
+    maxSize: 5 * 1024 * 1024, // 5MB
   });
 
-  // Calculate grand total
   const grandTotal = receipts.reduce(
     (sum, receipt) => sum + receipt.items.reduce((s, item) => s + item.price, 0),
     0
@@ -120,7 +106,7 @@ export default function Uploader() {
                   Drag & drop receipts here
                 </p>
                 <p className="text-sm text-gray-500 mt-1">
-                  Supported formats: JPG, PNG, PDF (max 5MB each)
+                  Supported formats: JPG, PNG (max 5MB each)
                 </p>
               </div>
               <button
@@ -164,12 +150,15 @@ export default function Uploader() {
             {/* Receipts List */}
             <div className="space-y-4">
               {receipts.map((receipt, i) => (
-                <div key={i} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div
+                  key={i}
+                  className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
+                >
                   <div className="p-5 border-b border-gray-100 bg-gray-50 flex items-center">
                     <ReceiptIcon className="w-5 h-5 text-gray-500 mr-2" />
                     <h3 className="font-medium text-gray-800">Receipt #{i + 1}</h3>
                   </div>
-                  
+
                   {receipt.items.length > 0 ? (
                     <div className="divide-y divide-gray-100">
                       {receipt.items.map((item, j) => (
@@ -183,7 +172,9 @@ export default function Uploader() {
                       <div className="px-5 py-3 bg-gray-50 flex justify-between font-semibold text-gray-900">
                         <span>Subtotal</span>
                         <span>
-                          {receipt.items.reduce((sum, item) => sum + item.price, 0).toFixed(2)}
+                          {receipt.items
+                            .reduce((sum, item) => sum + item.price, 0)
+                            .toFixed(2)}
                         </span>
                       </div>
                     </div>
