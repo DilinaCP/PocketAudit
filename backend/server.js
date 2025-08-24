@@ -1,59 +1,57 @@
 const express = require('express');
 const multer = require('multer');
-const fetch = require('node-fetch');
+const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
+const path = require('path');
 const cors = require('cors');
+
 const app = express();
-const router = express.Router();
 const upload = multer({ dest: 'uploads/' });
 
-const OCR_SPACE_API_KEY = 'K83657809388957';
+const OCR_SPACE_API_KEY = 'K83657809388957'; 
 
-router.use(cors({
-  origin: 'http://localhost:3000', 
-}));
+app.use(cors({ origin: 'http://localhost:3000' }));
 
-router.post('/api/uploadReceipt', upload.single('file'), async (req, res) => {
+app.post('/api/uploadReceipt', upload.single('file'), async (req, res) => {
   try {
+     console.log('--- New Upload Request ---');
+    console.log('Received file:', req.file);
     if (!req.file) {
+        console.log('❌ No file received');
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
+    const filePath = path.resolve(req.file.path);
+    console.log('Resolved file path:', filePath);
     const formData = new FormData();
+
     formData.append('apikey', OCR_SPACE_API_KEY);
     formData.append('language', 'eng');
-    formData.append('isTable', 'true');
-    formData.append('file', fs.createReadStream(req.file.path));
+    formData.append('file', fs.createReadStream(filePath));
 
-    const response = await fetch('https://api.ocr.space/parse/image', {
-      method: 'POST',
-      body: formData,
+    const response = await axios.post('https://api.ocr.space/parse/image', formData, {
+      headers: formData.getHeaders(),
     });
 
-    const data = await response.json();
+    const data = response.data;
 
-    // Clean up the uploaded file after processing
-    fs.unlink(req.file.path, (err) => {
-      if (err) console.error('Failed to delete temp file:', err);
-    });
+    fs.unlink(filePath, () => {});
 
-    if (data.IsErroredOnProcessing) {
-      return res.status(500).json({ error: data.ErrorMessage || 'OCR processing error' });
+    if (data.IsErroredOnProcessing || !data.ParsedResults?.[0]) {
+      return res.status(500).json({
+        error: data.ErrorMessage?.[0] || 'OCR failed',
+      });
     }
 
-    const parsedText = data.ParsedResults?.[0]?.ParsedText || '';
+    return res.json({ text: data.ParsedResults[0].ParsedText });
 
-    return res.json({ text: parsedText });
-  } catch (error) {
-    console.error('Error in /api/upload-receipt:', error);
-    return res.status(500).json({ error: error.message || 'Internal Server Error' });
+  } catch (err) {
+    console.error('Error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
-app.use('/', router);
-
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`PocketAudit backend listening on port ${PORT}`);
+app.listen(4000, () => {
+  console.log('PocketAudit backend running on http://localhost:4000');
 });

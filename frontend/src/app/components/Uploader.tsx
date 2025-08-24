@@ -14,8 +14,7 @@ export default function Uploader() {
   const [receipts, setReceipts] = useState<{ items: ReceiptItem[]; text: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Simple parser to extract description and price from OCR text lines
-  const extractItems = (text: string): ReceiptItem[] => {
+    const extractItems = (text: string): ReceiptItem[] => {
     const lines = text.split('\n');
     const items: ReceiptItem[] = [];
 
@@ -50,11 +49,17 @@ export default function Uploader() {
 
       const data = await res.json();
 
+        if (!data.text) {
+          throw new Error('OCR did not return any text');
+        }
+
+
       const items = extractItems(data.text);
 
       setReceipts((prev) => [...prev, { text: data.text, items }]);
       toast.success(`Processed: ${file.name}`);
     } catch (error: any) {
+      
       toast.error(`Failed to process ${file.name}: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -71,7 +76,7 @@ export default function Uploader() {
     onDrop,
     accept: { 'image/*': ['.jpeg', '.jpg', '.png'] },
     maxFiles: 5,
-    maxSize: 5 * 1024 * 1024, // 5MB
+    maxSize: 5 * 1024 * 1024, 
   });
 
   const grandTotal = receipts.reduce(
@@ -189,6 +194,6 @@ export default function Uploader() {
           </div>
         )}
       </div>
-    </div>
+    </div> 
   );
 }
